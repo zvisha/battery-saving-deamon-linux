@@ -1,7 +1,15 @@
 #!/bin/bash
+
+# Configuration
+APPS=("cursor" "brave")  # Add or modify apps here
+
+# State variables
 LAST_WID=""
 LAST_POWER=""
 ON_APP=""
+export DISPLAY=:0
+previous=""
+
 # Power functions
 disable_turbo() {
     echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo > /dev/null 2>&1
@@ -13,78 +21,120 @@ enable_turbo() {
     notify-send "Power" "Turbo ON" -t 2000
 }
 
-sleep_brave() {
-    killall -STOP brave 2>/dev/null
-#    notify-send "Brave" "Suspended" -t 1300
+# Generic app control functions
+sleep_app() {
+    local app="$1"
+    killall -STOP "$app" 2>/dev/null
+    notify-send "${app^}" "Suspended" -t 1300
 }
 
-wake_brave() {
-    killall -CONT brave 2>/dev/null
-    notify-send "Brave" "Resumed" -t 1300
+wake_app() {
+    local app="$1"
+    killall -CONT "$app" 2>/dev/null
+    notify-send "${app^}" "Resumed" -t 1300
 }
 
-sleep_cursor() {
-    killall -STOP cursor 2>/dev/null
-    notify-send "Cursor" "Suspended" -t 1300
+# Wake all configured apps
+wake_all_apps() {
+    for app in "${APPS[@]}"; do
+        wake_app "$app"
+    done
 }
 
-wake_cursor() {
-    killall -CONT cursor 2>/dev/null
-    notify-send "Cursor" "Resumed" -t 1300
+# Sleep all configured apps except the specified one
+sleep_other_apps() {
+    local active_app="$1"
+    for app in "${APPS[@]}"; do
+        if [ "$app" != "$active_app" ]; then
+            sleep_app "$app"
+        fi
+    done
 }
 
+# Sleep all configured apps
+sleep_all_apps() {
+    for app in "${APPS[@]}"; do
+        sleep_app "$app"
+    done
+}
+
+# Check if window name contains any of the configured apps
+get_active_app() {
+    local window="$1"
+    local window_lower="${window,,}"
+    
+    for app in "${APPS[@]}"; do
+        if [[ "$window_lower" == *"$app"* ]]; then
+            echo "$app"
+            return
+        fi
+    done
+    echo ""
+}
+
+update_clipboard() {
+    current=$(xclip -o -selection clipboard 2>/dev/null)
+    
+    if [ "$current" != "$previous" ] && [ -n "$current" ]; then
+        # Force store in buffer (breaks link to source app)
+        echo "$current" | xclip -selection clipboard -i
+        echo "$current" | xclip -selection primary -i
+        previous="$current"
+    fi
+}
+
+# Main loop
 while true; do
-    # Check power
+    # Check power status
     if grep -q "Discharging" /sys/class/power_supply/BAT*/status 2>/dev/null; then
         power="battery"
     else
         power="ac"
     fi
     
-    # Power changed?
+    # Handle power state changes
     if [ "$power" != "$LAST_POWER" ]; then
         if [ "$power" = "battery" ]; then
             disable_turbo
         else
             enable_turbo
-            wake_brave
-            wake_cursor
+            wake_all_apps
         fi
         LAST_POWER="$power"
     fi
     
-    # On AC? Just sleep
+    # On AC power, just sleep
     if [ "$power" = "ac" ]; then
         sleep 30
         continue
     fi
     
-    # Check window
+    # Check active window
     wid=$(xdotool getactivewindow 2>/dev/null)
     if [ "$wid" != "$LAST_WID" ]; then
         LAST_WID="$wid"
         window=$(xdotool getwindowname "$wid" 2>/dev/null)
         
-        if [[ "${window,,}" == *brave* ]]; then
-            wake_brave
-            sleep_cursor
-            ON_APP="brave"
+        # Get the active app from window name
+        active_app=$(get_active_app "$window")
+        
+        if [ -n "$active_app" ]; then
+            # Wake the active app and sleep others
+            wake_app "$active_app"
+            update_clipboard
+            sleep_other_apps "$active_app"
+            ON_APP="$active_app"
+            #update_clipboard
             sleep 1
-        elif [[ "${window,,}" == *cursor* ]]; then
-            wake_cursor
-            sleep_brave
-            ON_APP="cursor"
-            sleep 1
-        elif [[  "$ON_APP" == "cursor" ]]; then
-            sleep_cursor
+        elif [ -n "$ON_APP" ]; then
+            # No configured app is active, sleep the previously active one
+            update_clipboard
+            sleep_app "$ON_APP"
             ON_APP=""
-            sleep 1
-         elif [[  "$ON_APP" == "brave" ]]; then
-            sleep_brave
-            ON_APP=""
+            #update_clipboard
             sleep 1
         fi
     else
-        sleep 3
+        sleep 1
     fi
-done
+done 
