@@ -1,0 +1,90 @@
+#!/bin/bash
+LAST_WID=""
+LAST_POWER=""
+ON_APP=""
+# Power functions
+disable_turbo() {
+    echo 1 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo > /dev/null 2>&1
+    notify-send "Power" "Turbo OFF" -t 2000
+}
+
+enable_turbo() {
+    echo 0 | sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo > /dev/null 2>&1
+    notify-send "Power" "Turbo ON" -t 2000
+}
+
+sleep_brave() {
+    killall -STOP brave 2>/dev/null
+#    notify-send "Brave" "Suspended" -t 1300
+}
+
+wake_brave() {
+    killall -CONT brave 2>/dev/null
+    notify-send "Brave" "Resumed" -t 1300
+}
+
+sleep_cursor() {
+    killall -STOP cursor 2>/dev/null
+    notify-send "Cursor" "Suspended" -t 1300
+}
+
+wake_cursor() {
+    killall -CONT cursor 2>/dev/null
+    notify-send "Cursor" "Resumed" -t 1300
+}
+
+while true; do
+    # Check power
+    if grep -q "Discharging" /sys/class/power_supply/BAT*/status 2>/dev/null; then
+        power="battery"
+    else
+        power="ac"
+    fi
+    
+    # Power changed?
+    if [ "$power" != "$LAST_POWER" ]; then
+        if [ "$power" = "battery" ]; then
+            disable_turbo
+        else
+            enable_turbo
+            wake_brave
+            wake_cursor
+        fi
+        LAST_POWER="$power"
+    fi
+    
+    # On AC? Just sleep
+    if [ "$power" = "ac" ]; then
+        sleep 30
+        continue
+    fi
+    
+    # Check window
+    wid=$(xdotool getactivewindow 2>/dev/null)
+    if [ "$wid" != "$LAST_WID" ]; then
+        LAST_WID="$wid"
+        window=$(xdotool getwindowname "$wid" 2>/dev/null)
+        
+        if [[ "${window,,}" == *brave* ]]; then
+            wake_brave
+            sleep_cursor
+            ON_APP="brave"
+            sleep 1
+        elif [[ "${window,,}" == *cursor* ]]; then
+            wake_cursor
+            sleep_brave
+            ON_APP="cursor"
+            sleep 1
+        elif [[  "$ON_APP" == "cursor" ]]; then
+            sleep_cursor
+            ON_APP=""
+            sleep 1
+         elif [[  "$ON_APP" == "brave" ]]; then
+            sleep_brave
+            ON_APP=""
+            sleep 1
+        fi
+    else
+        sleep 3
+    fi
+done
